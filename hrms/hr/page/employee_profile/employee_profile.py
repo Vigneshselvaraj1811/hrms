@@ -263,6 +263,10 @@ def get_private(employee: str) -> dict:
 	)
 	pick = lambda fields: {field: values.get(field) for field in fields}  # noqa: E731
 	bank = pick(bank_fields)
+	permitted = set(frappe.get_meta("Employee").get_permitted_fieldnames())
+	for field in ("bank_ac_no", "iban"):
+		if field not in permitted:
+			bank[field] = None
 	# the profile shows which account, not the whole number
 	bank["bank_ac_no"] = mask(bank["bank_ac_no"])
 	bank["iban"] = mask(bank["iban"])
@@ -409,8 +413,9 @@ def get_decided_bank_request(employee: str) -> dict | None:
 
 
 def prepare_bank_request(request: frappe._dict) -> frappe._dict:
-	request.bank_ac_no = mask(request.bank_ac_no)
-	request.iban = mask(request.iban)
+	permitted = set(frappe.get_meta("Bank Details Change Request").get_permitted_fieldnames())
+	request.bank_ac_no = mask(request.bank_ac_no) if "bank_ac_no" in permitted else None
+	request.iban = mask(request.iban) if "iban" in permitted else None
 	request.proof_name = frappe.db.get_value(
 		"File",
 		{
@@ -425,21 +430,25 @@ def prepare_bank_request(request: frappe._dict) -> frappe._dict:
 
 
 @frappe.whitelist()
-def get_bank_number(employee: str, request: str | None = None) -> dict:
-	"""The whole account number and IBAN, which the profile shows only the end of: of the
-	employee's account, or of a change they asked for, so HR can check it against the proof. For
-	the employee and for HR, and each look is kept in the Access Log."""
+def get_bank_number(employee: str, field: str, request: str | None = None) -> dict:
+	"""Reveal one permitted bank field and record the read in the Access Log."""
+	if field not in ("bank_ac_no", "iban"):
+		frappe.throw(_("Invalid bank field"), frappe.PermissionError)
+	doctype = "Bank Details Change Request" if request else "Employee"
+	if field not in frappe.get_meta(doctype).get_permitted_fieldnames():
+		frappe.throw(_("Not permitted to see this bank detail"), frappe.PermissionError)
+
 	if request:
 		doc = frappe.get_doc("Bank Details Change Request", request)
 		doc.check_permission("read")
 		if doc.employee != employee:
 			frappe.throw(_("{0} is not a request of {1}").format(request, employee), frappe.PermissionError)
-		values = {"bank_ac_no": doc.bank_ac_no, "iban": doc.iban}
+		values = {field: doc.get(field)}
 		make_access_log(doctype=doc.doctype, document=doc.name, method="get_bank_number")
 	else:
 		if not frappe.has_permission("Employee", "read", doc=employee):
 			frappe.throw(_("Not permitted to see this bank account"), frappe.PermissionError)
-		values = frappe.db.get_value("Employee", employee, ["bank_ac_no", "iban"], as_dict=True)
+		values = {field: frappe.db.get_value("Employee", employee, field)}
 		make_access_log(doctype="Employee", document=employee, method="get_bank_number")
 	return values
 

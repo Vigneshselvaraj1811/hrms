@@ -4,6 +4,7 @@
 from unittest.mock import patch
 
 import frappe
+from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.utils import get_fullname, getdate
 
 from erpnext.assets.doctype.asset.test_asset import create_asset_category
@@ -354,21 +355,72 @@ class TestEmployeeProfile(HRMSTestSuite):
 		request = request_bank_details_change(
 			{"bank_name": "Test Bank", "bank_ac_no": "001122334455", "proof": upload("cheque.png")}
 		)["bank_request"]["name"]
-		self.assertEqual(get_bank_number(self.employee, request)["bank_ac_no"], "001122334455")
+		self.assertEqual(get_bank_number(self.employee, "bank_ac_no", request)["bank_ac_no"], "001122334455")
 
 		frappe.set_user(HR)
 		# each look is kept in the Access Log, which Frappe writes after the request
 		with patch("hrms.hr.page.employee_profile.employee_profile.make_access_log") as access_log:
-			self.assertEqual(get_bank_number(self.employee, request)["bank_ac_no"], "001122334455")
+			self.assertEqual(
+				get_bank_number(self.employee, "bank_ac_no", request)["bank_ac_no"], "001122334455"
+			)
 		access_log.assert_called_once_with(
 			doctype="Bank Details Change Request", document=request, method="get_bank_number"
 		)
 
 		frappe.set_user(COLLEAGUE)
-		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee)
-		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, request)
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, "bank_ac_no")
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, "bank_ac_no", request)
 		# a request is read only through its own employee
-		self.assertRaises(frappe.PermissionError, get_bank_number, self.colleague, request)
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.colleague, "bank_ac_no", request)
+
+	def test_bank_reveal_respects_employee_field_permissions(self):
+		frappe.set_user("Administrator")
+		frappe.db.set_value("Employee", self.employee, {"bank_ac_no": "001122334455", "iban": "TEST12345678"})
+		setter = make_property_setter(
+			"Employee", "bank_ac_no", "permlevel", 1, "Int", validate_fields_for_doctype=False
+		)
+		self.addCleanup(frappe.clear_cache, doctype="Employee")
+		self.addCleanup(frappe.delete_doc, "Property Setter", setter.name, ignore_permissions=True)
+
+		frappe.set_user(HR)
+		self.assertTrue(frappe.has_permission("Employee", "read", doc=self.employee))
+		self.assertNotIn("bank_ac_no", frappe.get_meta("Employee").get_permitted_fieldnames())
+		self.assertIsNone(get_profile(self.employee)["private"]["bank"]["bank_ac_no"])
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, "bank_ac_no")
+		self.assertEqual(get_bank_number(self.employee, "iban"), {"iban": "TEST12345678"})
+		frappe.set_user("Administrator")
+		iban_setter = make_property_setter(
+			"Employee", "iban", "permlevel", 1, "Int", validate_fields_for_doctype=False
+		)
+		self.addCleanup(frappe.delete_doc, "Property Setter", iban_setter.name, ignore_permissions=True)
+		frappe.set_user(HR)
+		self.assertIsNone(get_profile(self.employee)["private"]["bank"]["iban"])
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, "iban")
+
+	def test_bank_reveal_respects_request_field_permissions(self):
+		frappe.set_user(SELF)
+		request = request_bank_details_change(
+			{"bank_name": "Test Bank", "bank_ac_no": "001122334455", "proof": upload("cheque.png")}
+		)["bank_request"]["name"]
+		frappe.set_user("Administrator")
+		setter = make_property_setter(
+			"Bank Details Change Request",
+			"bank_ac_no",
+			"permlevel",
+			1,
+			"Int",
+			validate_fields_for_doctype=False,
+		)
+		self.addCleanup(frappe.clear_cache, doctype="Bank Details Change Request")
+		self.addCleanup(frappe.delete_doc, "Property Setter", setter.name, ignore_permissions=True)
+
+		frappe.set_user(HR)
+		self.assertTrue(frappe.has_permission("Bank Details Change Request", "read", doc=request))
+		self.assertNotIn(
+			"bank_ac_no", frappe.get_meta("Bank Details Change Request").get_permitted_fieldnames()
+		)
+		self.assertIsNone(get_profile(self.employee)["private"]["bank_request"]["bank_ac_no"])
+		self.assertRaises(frappe.PermissionError, get_bank_number, self.employee, "bank_ac_no", request)
 
 	def test_approved_asset_request_waits_for_its_movement(self):
 		frappe.set_user(SELF)

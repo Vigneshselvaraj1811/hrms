@@ -31,7 +31,7 @@ const frappe = window.frappe;
 // The numbers show only their end. The eye fetches the whole of one, of the account or of a
 // request, so HR can check it against the proof.
 const reveal = (field, request) => async () =>
-	(await frappe.xcall(`${API}.get_bank_number`, { employee: props.employee, request }))[field];
+	(await frappe.xcall(`${API}.get_bank_number`, { employee: props.employee, field, request }))[field];
 
 const account_rows = (account, request = null) => [
 	{ label: __("Bank"), icon: "lucide-landmark", value: account.bank_name },
